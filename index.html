@@ -103,7 +103,6 @@
             constructor(seed = 0) {
                 this.p = [];
                 for (let i = 0; i < 256; i++) this.p[i] = i;
-                // Shuffle with seed
                 const rng = this.seededRandom(seed);
                 for (let i = 255; i > 0; i--) {
                     const j = Math.floor(rng() * (i + 1));
@@ -157,9 +156,8 @@
         scene.background = new THREE.Color(0x050510);
         scene.fog = new THREE.FogExp2(0x050510, 0.008);
 
-        // Camera: far plane large enough for sky sphere
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 800);
-        camera.position.set(0, 25, 0);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
+        camera.position.set(0, 15, 0);
         camera.rotation.order = 'YXZ';
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -169,7 +167,7 @@
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(renderer.domElement);
 
-        // --- EVEN GRADIENT SKY (based on elevation angle, centered at camera) ---
+        // --- EVEN GRADIENT SKY ---
         const skyVertexShader = `
             varying vec3 vWorldPosition;
             void main() {
@@ -185,11 +183,8 @@
             uniform vec3 cameraPos;
             varying vec3 vWorldPosition;
             void main() {
-                // direction from camera to sky point
                 vec3 dir = normalize(vWorldPosition - cameraPos);
-                // elevation angle: y component of direction (0 = horizon, 1 = zenith)
                 float t = clamp(dir.y, 0.0, 1.0);
-                // smoothstep for nicer transition
                 t = smoothstep(0.0, 0.8, t);
                 vec3 finalColor = mix(colorBottom, colorTop, t);
                 gl_FragColor = vec4(finalColor, 1.0);
@@ -198,8 +193,8 @@
         
         const skyMaterial = new THREE.ShaderMaterial({
             uniforms: {
-                colorTop: { value: new THREE.Color(0x1a4d8c) },    // deep blue at top
-                colorBottom: { value: new THREE.Color(0x7ab8e0) },  // light blue at horizon
+                colorTop: { value: new THREE.Color(0x1a4d8c) },
+                colorBottom: { value: new THREE.Color(0x7ab8e0) },
                 cameraPos: { value: new THREE.Vector3() }
             },
             vertexShader: skyVertexShader,
@@ -209,11 +204,9 @@
             depthTest: true
         });
         
-        // Large sphere centered at world origin (0,0,0)
         const skySphere = new THREE.Mesh(new THREE.SphereGeometry(450, 64, 64), skyMaterial);
         scene.add(skySphere);
         
-        // Update camera position uniform in the sky shader each frame
         function updateSkyShaderCamera() {
             skyMaterial.uniforms.cameraPos.value.copy(camera.position);
         }
@@ -302,7 +295,7 @@
         const vertScene = createFullscreenScene(verticalBlurMat);
         const blendScene = createFullscreenScene(blendMat);
         
-        // --- ASCII Shader (same robust version) ---
+        // --- ASCII Shader ---
         const asciiVertex = `
             varying vec2 vUv;
             void main() {
@@ -399,104 +392,115 @@
         
         const asciiScene = createFullscreenScene(asciiMat);
         
-        // --- PROCEDURAL VOXEL WORLD GENERATION ---
+        // --- OPTIMIZED CHUNKED VOXEL SYSTEM ---
         const perlin = new PerlinNoise(42);
         const voxelSize = 1;
-        const worldRadius = 30;
+        const chunkSize = 8;
+        const renderDistance = 3;
+        const worldContainer = new THREE.Group();
+        scene.add(worldContainer);
+        
+        const chunks = new Map();
         const materials = [
-            new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.8 }),        // dirt
-            new THREE.MeshStandardMaterial({ color: 0x704020, roughness: 0.9 }),        // stone
-            new THREE.MeshStandardMaterial({ color: 0x2d5016, roughness: 0.7 }),        // grass
-            new THREE.MeshStandardMaterial({ color: 0xa0a0a0, roughness: 0.5, metalness: 0.3 }), // sand
-            new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),    // orange
-            new THREE.MeshStandardMaterial({ color: 0x33aaff, emissive: 0x002244 }),    // blue
+            new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.8 }),
+            new THREE.MeshStandardMaterial({ color: 0x704020, roughness: 0.9 }),
+            new THREE.MeshStandardMaterial({ color: 0x2d5016, roughness: 0.7 }),
+            new THREE.MeshStandardMaterial({ color: 0xa0a0a0, roughness: 0.5, metalness: 0.3 }),
+            new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),
         ];
 
-        function generateVoxelTerrain() {
-            const voxelGroup = new THREE.Group();
-            const voxelMap = {};
+        function generateChunk(chunkX, chunkZ) {
+            const key = `${chunkX},${chunkZ}`;
+            if (chunks.has(key)) return chunks.get(key);
 
-            for (let x = -worldRadius; x <= worldRadius; x++) {
-                for (let z = -worldRadius; z <= worldRadius; z++) {
-                    // Terrain height using Perlin noise
-                    const heightNoise = perlin.perlin(x * 0.1, z * 0.1);
-                    const baseHeight = Math.floor(10 + heightNoise * 8);
+            const positions = [];
+            const colors = [];
+            const colorObj = new THREE.Color();
 
-                    // Feature noise for variety
-                    const featureNoise = perlin.perlin(x * 0.05, z * 0.05, 0);
-                    const spawnFeature = featureNoise > 0.4;
+            for (let x = 0; x < chunkSize; x++) {
+                for (let z = 0; z < chunkSize; z++) {
+                    const worldX = chunkX * chunkSize + x;
+                    const worldZ = chunkZ * chunkSize + z;
+
+                    const heightNoise = perlin.perlin(worldX * 0.08, worldZ * 0.08);
+                    const baseHeight = Math.floor(8 + heightNoise * 6);
 
                     for (let y = 0; y <= baseHeight; y++) {
-                        const key = `${x},${y},${z}`;
-                        let materialIdx = 1; // stone default
-
+                        let matIdx = 1;
                         if (y === baseHeight) {
-                            materialIdx = 2; // grass on top
+                            matIdx = 2;
                         } else if (y > baseHeight - 3) {
-                            materialIdx = 0; // dirt layer
-                        } else if (y < baseHeight - 10 && Math.random() < 0.1) {
-                            materialIdx = 1; // stone
+                            matIdx = 0;
                         }
 
-                        // Add ore veins
-                        if (y > baseHeight - 15 && Math.random() < 0.05) {
-                            materialIdx = 5; // ore (blue)
+                        if (y > baseHeight - 8 && Math.random() < 0.03) {
+                            matIdx = 4;
                         }
 
-                        voxelMap[key] = materialIdx;
+                        const px = worldX * voxelSize;
+                        const py = y * voxelSize;
+                        const pz = worldZ * voxelSize;
+                        const s = voxelSize * 0.48;
 
-                        // Spawn feature structures
-                        if (spawnFeature && y === baseHeight + 1 && Math.random() < 0.15) {
-                            const featureHeight = 3 + Math.floor(Math.random() * 4);
-                            for (let fy = 0; fy < featureHeight; fy++) {
-                                const fkey = `${x},${y + fy},${z}`;
-                                voxelMap[fkey] = 4; // orange feature blocks
-                            }
+                        const verts = [
+                            px - s, py - s, pz - s, px + s, py - s, pz - s,
+                            px + s, py + s, pz - s, px - s, py + s, pz - s,
+                            px - s, py - s, pz + s, px + s, py - s, pz + s,
+                            px + s, py + s, pz + s, px - s, py + s, pz + s,
+                        ];
+
+                        for (let i = 0; i < verts.length; i += 3) {
+                            positions.push(verts[i], verts[i + 1], verts[i + 2]);
+                            const mat = materials[matIdx];
+                            colors.push(mat.color.r, mat.color.g, mat.color.b);
                         }
                     }
                 }
             }
 
-            // Create merged geometry for performance
-            const geometry = new THREE.BufferGeometry();
-            const positions = [];
-            const colors = [];
+            if (positions.length === 0) {
+                chunks.set(key, null);
+                return null;
+            }
 
-            Object.entries(voxelMap).forEach(([key, matIdx]) => {
-                const [x, y, z] = key.split(',').map(Number);
-                const pos = new THREE.Vector3(x * voxelSize, y * voxelSize, z * voxelSize);
-                const box = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
-                box.translate(pos.x, pos.y, pos.z);
+            const geom = new THREE.BufferGeometry();
+            geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+            geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+            geom.computeVertexNormals();
 
-                const color = new THREE.Color(materials[matIdx].color);
-                const posAttr = box.getAttribute('position');
-                const indices = box.getIndex();
-
-                for (let i = 0; i < posAttr.count; i++) {
-                    positions.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
-                    colors.push(color.r, color.g, color.b);
-                }
-            });
-
-            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
-            geometry.computeVertexNormals();
-
-            const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ 
+            const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ 
                 roughness: 0.8,
-                vertexColors: true
+                vertexColors: true,
+                castShadow: true,
+                receiveShadow: true
             }));
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-            voxelGroup.add(mesh);
 
-            return { voxelGroup, voxelMap };
+            chunks.set(key, mesh);
+            return mesh;
         }
 
-        const { voxelGroup, voxelMap } = generateVoxelTerrain();
-        scene.add(voxelGroup);
+        let lastChunkX = 0, lastChunkZ = 0;
 
-        // Lighting with shadows
+        function updateChunks() {
+            const chunkX = Math.floor(camera.position.x / (chunkSize * voxelSize));
+            const chunkZ = Math.floor(camera.position.z / (chunkSize * voxelSize));
+
+            if (chunkX === lastChunkX && chunkZ === lastChunkZ) return;
+
+            lastChunkX = chunkX;
+            lastChunkZ = chunkZ;
+
+            worldContainer.children = [];
+
+            for (let cx = chunkX - renderDistance; cx <= chunkX + renderDistance; cx++) {
+                for (let cz = chunkZ - renderDistance; cz <= chunkZ + renderDistance; cz++) {
+                    const chunk = generateChunk(cx, cz);
+                    if (chunk) worldContainer.add(chunk);
+                }
+            }
+        }
+
+        // Lighting
         const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
         scene.add(ambientLight);
         
@@ -514,18 +518,14 @@
         mainLight.shadow.bias = -0.0001;
         scene.add(mainLight);
         
-        const fillLight = new THREE.PointLight(0x5577aa, 0.4);
-        fillLight.position.set(-20, 30, 10);
-        fillLight.castShadow = false;
-        scene.add(fillLight);
-        
         // --- FPS CONTROLS ---
         const keyState = { KeyW: false, KeyA: false, KeyS: false, KeyD: false };
-        let yaw = 0;
-        let pitch = 0;
+        let yaw = 0, pitch = 0;
         let pointerLocked = false;
         let lastTime = performance.now();
-        const moveSpeed = 10;
+        const moveSpeed = 8;
+        let velocity = new THREE.Vector3();
+        const gravity = 20;
 
         document.addEventListener('keydown', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = true; });
         document.addEventListener('keyup', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = false; });
@@ -559,34 +559,6 @@
             camera.rotation.x = pitch;
         }
 
-        function checkCollision(pos, radius = 0.45) {
-            pos.x = Math.max(-worldRadius * voxelSize, Math.min(worldRadius * voxelSize, pos.x));
-            pos.z = Math.max(-worldRadius * voxelSize, Math.min(worldRadius * voxelSize, pos.z));
-            
-            const voxelX = Math.round(pos.x / voxelSize);
-            const voxelY = Math.floor(pos.y / voxelSize);
-            const voxelZ = Math.round(pos.z / voxelSize);
-            
-            for (let dx = -1; dx <= 1; dx++) {
-                for (let dz = -1; dz <= 1; dz++) {
-                    for (let dy = -1; dy <= 2; dy++) {
-                        const key = `${voxelX + dx},${voxelY + dy},${voxelZ + dz}`;
-                        if (voxelMap[key] !== undefined) {
-                            const voxPos = new THREE.Vector3((voxelX + dx) * voxelSize, (voxelY + dy) * voxelSize, (voxelZ + dz) * voxelSize);
-                            const halfSize = voxelSize / 2;
-                            
-                            if (Math.abs(pos.x - voxPos.x) < halfSize + radius &&
-                                Math.abs(pos.y - voxPos.y) < halfSize + radius &&
-                                Math.abs(pos.z - voxPos.z) < halfSize + radius) {
-                                return false; // collision detected
-                            }
-                        }
-                    }
-                }
-            }
-            return true;
-        }
-
         function resizeRTs(w, h) {
             mainRT.setSize(w, h);
             blurRT1.setSize(w, h);
@@ -603,38 +575,34 @@
             let delta = Math.min(0.033, (now - lastTime) / 1000);
             lastTime = now;
 
+            updateChunks();
+
             if (pointerLocked) {
                 const forward = new THREE.Vector3();
                 camera.getWorldDirection(forward);
                 forward.y = 0;
                 forward.normalize();
                 const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
-                right.normalize();
 
-                let move = new THREE.Vector3(0, 0, 0);
+                let move = new THREE.Vector3();
                 if (keyState.KeyW) move.z += 1;
                 if (keyState.KeyS) move.z -= 1;
                 if (keyState.KeyD) move.x += 1;
                 if (keyState.KeyA) move.x -= 1;
                 if (move.length() > 0) move.normalize();
                 
-                let newPos = camera.position.clone();
-                newPos.x += (move.z * forward.x + move.x * right.x) * moveSpeed * delta;
-                newPos.z += (move.z * forward.z + move.x * right.z) * moveSpeed * delta;
+                camera.position.x += (move.z * forward.x + move.x * right.x) * moveSpeed * delta;
+                camera.position.z += (move.z * forward.z + move.x * right.z) * moveSpeed * delta;
                 
-                // gravity
-                newPos.y -= 9.8 * delta * 3;
+                velocity.y -= gravity * delta;
+                camera.position.y += velocity.y * delta;
                 
-                if (checkCollision(newPos, 0.5)) {
-                    camera.position.x = newPos.x;
-                    camera.position.y = newPos.y;
-                    camera.position.z = newPos.z;
-                } else {
-                    camera.position.y = Math.max(1.6, camera.position.y);
+                if (camera.position.y < 1.6) {
+                    camera.position.y = 1.6;
+                    velocity.y = 0;
                 }
             }
 
-            // Update sky shader camera position for correct gradient orientation
             updateSkyShaderCamera();
 
             const w = window.innerWidth;
@@ -643,11 +611,9 @@
                 resizeRTs(w, h);
             }
             
-            // 1. Render scene to mainRT
             renderer.setRenderTarget(mainRT);
             renderer.render(scene, camera);
             
-            // 2. Bloom passes
             horizontalBlurMat.uniforms.tDiffuse.value = mainRT.texture;
             renderer.setRenderTarget(blurRT1);
             renderer.render(horiScene.scene, horiScene.camera);
@@ -661,7 +627,6 @@
             renderer.setRenderTarget(bloomRT);
             renderer.render(blendScene.scene, blendScene.camera);
             
-            // 3. ASCII final output
             renderer.setRenderTarget(null);
             asciiMat.uniforms.iChannel0.value = bloomRT.texture;
             asciiMat.uniforms.iTime.value = now / 1000;
