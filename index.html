@@ -157,7 +157,7 @@
         scene.fog = new THREE.FogExp2(0x050510, 0.008);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
-        camera.position.set(0, 15, 0);
+        camera.position.set(0, 40, 0);
         camera.rotation.order = 'YXZ';
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -395,12 +395,13 @@
         // --- OPTIMIZED CHUNKED VOXEL SYSTEM ---
         const perlin = new PerlinNoise(42);
         const voxelSize = 1;
-        const chunkSize = 8;
-        const renderDistance = 3;
+        const chunkSize = 16;
+        const renderDistance = 2;
         const worldContainer = new THREE.Group();
         scene.add(worldContainer);
         
         const chunks = new Map();
+        const voxelCache = new Map();
         const materials = [
             new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.8 }),
             new THREE.MeshStandardMaterial({ color: 0x704020, roughness: 0.9 }),
@@ -409,39 +410,48 @@
             new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),
         ];
 
+        function getVoxel(x, y, z) {
+            const key = `${x},${y},${z}`;
+            if (voxelCache.has(key)) return voxelCache.get(key);
+
+            if (y < 0 || y > 25) return 0; // bounds
+
+            const heightNoise = perlin.perlin(x * 0.08, z * 0.08);
+            const baseHeight = Math.floor(8 + heightNoise * 6);
+
+            let voxel = 0;
+            if (y <= baseHeight) {
+                if (y === baseHeight) voxel = 2; // grass
+                else if (y > baseHeight - 3) voxel = 0; // dirt
+                else voxel = 1; // stone
+            }
+
+            voxelCache.set(key, voxel);
+            return voxel;
+        }
+
         function generateChunk(chunkX, chunkZ) {
             const key = `${chunkX},${chunkZ}`;
             if (chunks.has(key)) return chunks.get(key);
 
             const positions = [];
             const colors = [];
-            const colorObj = new THREE.Color();
 
-            for (let x = 0; x < chunkSize; x++) {
-                for (let z = 0; z < chunkSize; z++) {
-                    const worldX = chunkX * chunkSize + x;
-                    const worldZ = chunkZ * chunkSize + z;
+            for (let lx = 0; lx < chunkSize; lx++) {
+                for (let lz = 0; lz < chunkSize; lz++) {
+                    for (let y = 0; y < 20; y++) {
+                        const x = chunkX * chunkSize + lx;
+                        const z = chunkZ * chunkSize + lz;
+                        const voxel = getVoxel(x, y, z);
 
-                    const heightNoise = perlin.perlin(worldX * 0.08, worldZ * 0.08);
-                    const baseHeight = Math.floor(8 + heightNoise * 6);
+                        if (voxel === 0) continue;
 
-                    for (let y = 0; y <= baseHeight; y++) {
-                        let matIdx = 1;
-                        if (y === baseHeight) {
-                            matIdx = 2;
-                        } else if (y > baseHeight - 3) {
-                            matIdx = 0;
-                        }
-
-                        if (y > baseHeight - 8 && Math.random() < 0.03) {
-                            matIdx = 4;
-                        }
-
-                        const px = worldX * voxelSize;
+                        const px = x * voxelSize;
                         const py = y * voxelSize;
-                        const pz = worldZ * voxelSize;
-                        const s = voxelSize * 0.48;
+                        const pz = z * voxelSize;
+                        const s = voxelSize * 0.5;
 
+                        // Build cube vertices
                         const verts = [
                             px - s, py - s, pz - s, px + s, py - s, pz - s,
                             px + s, py + s, pz - s, px - s, py + s, pz - s,
@@ -449,9 +459,9 @@
                             px + s, py + s, pz + s, px - s, py + s, pz + s,
                         ];
 
+                        const mat = materials[voxel];
                         for (let i = 0; i < verts.length; i += 3) {
                             positions.push(verts[i], verts[i + 1], verts[i + 2]);
-                            const mat = materials[matIdx];
                             colors.push(mat.color.r, mat.color.g, mat.color.b);
                         }
                     }
@@ -490,7 +500,7 @@
             lastChunkX = chunkX;
             lastChunkZ = chunkZ;
 
-            worldContainer.children = [];
+            worldContainer.clear();
 
             for (let cx = chunkX - renderDistance; cx <= chunkX + renderDistance; cx++) {
                 for (let cz = chunkZ - renderDistance; cz <= chunkZ + renderDistance; cz++) {
@@ -501,7 +511,7 @@
         }
 
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
+        const ambientLight = new THREE.AmbientLight(0x606080, 0.7);
         scene.add(ambientLight);
         
         const mainLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
@@ -519,13 +529,14 @@
         scene.add(mainLight);
         
         // --- FPS CONTROLS ---
-        const keyState = { KeyW: false, KeyA: false, KeyS: false, KeyD: false };
+        const keyState = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
         let yaw = 0, pitch = 0;
         let pointerLocked = false;
         let lastTime = performance.now();
         const moveSpeed = 8;
         let velocity = new THREE.Vector3();
-        const gravity = 20;
+        const gravity = 25;
+        let isOnGround = false;
 
         document.addEventListener('keydown', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = true; });
         document.addEventListener('keyup', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = false; });
@@ -559,6 +570,28 @@
             camera.rotation.x = pitch;
         }
 
+        function isVoxelSolid(x, y, z) {
+            return getVoxel(Math.floor(x), Math.floor(y), Math.floor(z)) > 0;
+        }
+
+        function checkCollision(newPos, radius = 0.3) {
+            const checkPoints = [
+                [newPos.x - radius, newPos.y, newPos.z],
+                [newPos.x + radius, newPos.y, newPos.z],
+                [newPos.x, newPos.y, newPos.z - radius],
+                [newPos.x, newPos.y, newPos.z + radius],
+                [newPos.x - radius, newPos.y - 0.1, newPos.z - radius],
+                [newPos.x + radius, newPos.y - 0.1, newPos.z + radius],
+            ];
+
+            for (let [x, y, z] of checkPoints) {
+                if (isVoxelSolid(x, y, z)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         function resizeRTs(w, h) {
             mainRT.setSize(w, h);
             blurRT1.setSize(w, h);
@@ -584,22 +617,40 @@
                 forward.normalize();
                 const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
 
-                let move = new THREE.Vector3();
-                if (keyState.KeyW) move.z += 1;
-                if (keyState.KeyS) move.z -= 1;
-                if (keyState.KeyD) move.x += 1;
-                if (keyState.KeyA) move.x -= 1;
-                if (move.length() > 0) move.normalize();
+                let moveDir = new THREE.Vector3();
+                if (keyState.KeyW) moveDir.z += 1;
+                if (keyState.KeyS) moveDir.z -= 1;
+                if (keyState.KeyD) moveDir.x += 1;
+                if (keyState.KeyA) moveDir.x -= 1;
+                if (moveDir.length() > 0) moveDir.normalize();
                 
-                camera.position.x += (move.z * forward.x + move.x * right.x) * moveSpeed * delta;
-                camera.position.z += (move.z * forward.z + move.x * right.z) * moveSpeed * delta;
+                let newPos = camera.position.clone();
+                newPos.x += (moveDir.z * forward.x + moveDir.x * right.x) * moveSpeed * delta;
+                newPos.z += (moveDir.z * forward.z + moveDir.x * right.z) * moveSpeed * delta;
+
+                if (checkCollision(newPos)) {
+                    camera.position.x = newPos.x;
+                    camera.position.z = newPos.z;
+                }
                 
+                // Gravity
                 velocity.y -= gravity * delta;
                 camera.position.y += velocity.y * delta;
                 
+                // Ground check
+                isOnGround = false;
                 if (camera.position.y < 1.6) {
-                    camera.position.y = 1.6;
+                    // Find ground level
+                    let groundY = 0;
+                    for (let y = Math.floor(camera.position.y); y >= 0; y--) {
+                        if (isVoxelSolid(camera.position.x, y, camera.position.z)) {
+                            groundY = y + 1;
+                            break;
+                        }
+                    }
+                    camera.position.y = Math.max(groundY + 1.6, camera.position.y);
                     velocity.y = 0;
+                    isOnGround = true;
                 }
             }
 
