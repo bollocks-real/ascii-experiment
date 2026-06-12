@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>ASCII FPS – Even Gradient Sky | Bloom + Shadows</title>
+    <title>ASCII FPS – Procedural Voxel World | Bloom + Shadows</title>
     <style>
         body {
             margin: 0;
@@ -74,17 +74,17 @@
 </head>
 <body>
     <div id="info">
-        🧬 ASCII + EVEN SKY GRADIENT | WASD + MOUSE
+        🧬 ASCII + PROCEDURAL VOXEL | WASD + MOUSE
     </div>
     <div id="controls">
         🎮 WASD to move | 🖱️ Mouse to look | Click to lock cursor
     </div>
     <div id="status">
-        ✨ BLOOM | 🌑 SHADOWS | 🌤️ SMOOTH SKY
+        ✨ BLOOM | 🌑 SHADOWS | 🌍 GENERATED
     </div>
     <div class="instruction" id="clickPrompt">
         🔥 CLICK TO START 🔥<br>
-        <span>W/A/S/D</span> to explore the ASCII world
+        <span>W/A/S/D</span> to explore the procedural voxel world
     </div>
 
     <script type="importmap">
@@ -98,6 +98,60 @@
     <script type="module">
         import * as THREE from 'three';
 
+        // --- PERLIN NOISE IMPLEMENTATION ---
+        class PerlinNoise {
+            constructor(seed = 0) {
+                this.p = [];
+                for (let i = 0; i < 256; i++) this.p[i] = i;
+                // Shuffle with seed
+                const rng = this.seededRandom(seed);
+                for (let i = 255; i > 0; i--) {
+                    const j = Math.floor(rng() * (i + 1));
+                    [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
+                }
+                this.p = [...this.p, ...this.p];
+            }
+
+            seededRandom(seed) {
+                return function() {
+                    seed = (seed * 9301 + 49297) % 233280;
+                    return seed / 233280;
+                };
+            }
+
+            fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+            lerp(t, a, b) { return a + t * (b - a); }
+            grad(hash, x, y, z) {
+                const h = hash & 15;
+                const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+                return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+            }
+
+            perlin(x, y, z = 0) {
+                const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255, zi = Math.floor(z) & 255;
+                const xf = x - Math.floor(x), yf = y - Math.floor(y), zf = z - Math.floor(z);
+                const u = this.fade(xf), v = this.fade(yf), w = this.fade(zf);
+
+                const aa = this.p[this.p[xi] + yi], aaa = this.p[aa + zi], aab = this.p[aa + zi + 1];
+                const ba = this.p[this.p[xi + 1] + yi], baa = this.p[ba + zi], bab = this.p[ba + zi + 1];
+                const ab = this.p[this.p[xi] + yi + 1], aba = this.p[ab + zi], abb = this.p[ab + zi + 1];
+                const bb = this.p[this.p[xi + 1] + yi + 1], bba = this.p[bb + zi], bbb = this.p[bb + zi + 1];
+
+                const g1 = this.grad(this.p[aaa], xf, yf, zf);
+                const g2 = this.grad(this.p[baa], xf - 1, yf, zf);
+                const g3 = this.grad(this.p[aba], xf, yf - 1, zf);
+                const g4 = this.grad(this.p[bba], xf - 1, yf - 1, zf);
+                const g5 = this.grad(this.p[aab], xf, yf, zf - 1);
+                const g6 = this.grad(this.p[bab], xf - 1, yf, zf - 1);
+                const g7 = this.grad(this.p[abb], xf, yf - 1, zf - 1);
+                const g8 = this.grad(this.p[bbb], xf - 1, yf - 1, zf - 1);
+
+                const xy1 = this.lerp(u, g1, g2), xy2 = this.lerp(u, g3, g4), xy3 = this.lerp(u, g5, g6), xy4 = this.lerp(u, g7, g8);
+                const z1 = this.lerp(v, xy1, xy2), z2 = this.lerp(v, xy3, xy4);
+                return this.lerp(w, z1, z2);
+            }
+        }
+
         // --- setup core three.js ---
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x050510);
@@ -105,7 +159,7 @@
 
         // Camera: far plane large enough for sky sphere
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 800);
-        camera.position.set(0, 1.6, 5);
+        camera.position.set(0, 25, 0);
         camera.rotation.order = 'YXZ';
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -345,92 +399,133 @@
         
         const asciiScene = createFullscreenScene(asciiMat);
         
-        // --- WORLD (ground, obstacles, decorations) ---
-        const groundMat = new THREE.MeshStandardMaterial({ color: 0x3c8c40, roughness: 0.7 });
-        const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), groundMat);
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -0.05;
-        ground.receiveShadow = true;
-        scene.add(ground);
-
-        const gridHelper = new THREE.GridHelper(40, 20, 0xaaffaa, 0x448844);
-        gridHelper.position.y = -0.02;
-        scene.add(gridHelper);
-
+        // --- PROCEDURAL VOXEL WORLD GENERATION ---
+        const perlin = new PerlinNoise(42);
+        const voxelSize = 1;
+        const worldRadius = 30;
         const materials = [
-            new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),
-            new THREE.MeshStandardMaterial({ color: 0x33aaff, emissive: 0x002244 }),
-            new THREE.MeshStandardMaterial({ color: 0xddbb33, metalness: 0.5, emissive: 0x442200 }),
-            new THREE.MeshStandardMaterial({ color: 0xaa66cc, emissive: 0x331166 }),
-            new THREE.MeshStandardMaterial({ color: 0x66ccaa, emissive: 0x226644 }),
-            new THREE.MeshStandardMaterial({ color: 0xffaa66, emissive: 0x442200 })
+            new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.8 }),        // dirt
+            new THREE.MeshStandardMaterial({ color: 0x704020, roughness: 0.9 }),        // stone
+            new THREE.MeshStandardMaterial({ color: 0x2d5016, roughness: 0.7 }),        // grass
+            new THREE.MeshStandardMaterial({ color: 0xa0a0a0, roughness: 0.5, metalness: 0.3 }), // sand
+            new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),    // orange
+            new THREE.MeshStandardMaterial({ color: 0x33aaff, emissive: 0x002244 }),    // blue
         ];
-        const obstaclePositions = [
-            [-3,2], [2.5,-1], [0,4], [-2.5,-3], [3.8,1.5], [-1,-2], [1.2,3.2], [-3.5,-2.5], [4,-2], [0,-4]
-        ];
-        const obstacles = [];
-        obstaclePositions.forEach((pos, i) => {
-            const w = 1.2, h = 1.5 + Math.sin(i)*0.3, d = 1.2;
-            const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), materials[i % materials.length]);
-            box.position.set(pos[0], h/2, pos[1]);
-            box.castShadow = true;
-            box.receiveShadow = true;
-            scene.add(box);
-            obstacles.push(box);
-        });
 
-        const torus = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.12, 32, 64), new THREE.MeshStandardMaterial({ color: 0xffaa44, emissive: 0x442200 }));
-        torus.position.set(2, 1.2, 3.5);
-        torus.castShadow = true;
-        torus.receiveShadow = false;
-        scene.add(torus);
-        
-        const floatingSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5, 24, 24), new THREE.MeshStandardMaterial({ color: 0x44ccff, emissive: 0x004466 }));
-        floatingSphere.position.set(-2.5, 1.0, -3);
-        floatingSphere.castShadow = true;
-        floatingSphere.receiveShadow = true;
-        scene.add(floatingSphere);
+        function generateVoxelTerrain() {
+            const voxelGroup = new THREE.Group();
+            const voxelMap = {};
+
+            for (let x = -worldRadius; x <= worldRadius; x++) {
+                for (let z = -worldRadius; z <= worldRadius; z++) {
+                    // Terrain height using Perlin noise
+                    const heightNoise = perlin.perlin(x * 0.1, z * 0.1);
+                    const baseHeight = Math.floor(10 + heightNoise * 8);
+
+                    // Feature noise for variety
+                    const featureNoise = perlin.perlin(x * 0.05, z * 0.05, 0);
+                    const spawnFeature = featureNoise > 0.4;
+
+                    for (let y = 0; y <= baseHeight; y++) {
+                        const key = `${x},${y},${z}`;
+                        let materialIdx = 1; // stone default
+
+                        if (y === baseHeight) {
+                            materialIdx = 2; // grass on top
+                        } else if (y > baseHeight - 3) {
+                            materialIdx = 0; // dirt layer
+                        } else if (y < baseHeight - 10 && Math.random() < 0.1) {
+                            materialIdx = 1; // stone
+                        }
+
+                        // Add ore veins
+                        if (y > baseHeight - 15 && Math.random() < 0.05) {
+                            materialIdx = 5; // ore (blue)
+                        }
+
+                        voxelMap[key] = materialIdx;
+
+                        // Spawn feature structures
+                        if (spawnFeature && y === baseHeight + 1 && Math.random() < 0.15) {
+                            const featureHeight = 3 + Math.floor(Math.random() * 4);
+                            for (let fy = 0; fy < featureHeight; fy++) {
+                                const fkey = `${x},${y + fy},${z}`;
+                                voxelMap[fkey] = 4; // orange feature blocks
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Create merged geometry for performance
+            const geometry = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+
+            Object.entries(voxelMap).forEach(([key, matIdx]) => {
+                const [x, y, z] = key.split(',').map(Number);
+                const pos = new THREE.Vector3(x * voxelSize, y * voxelSize, z * voxelSize);
+                const box = new THREE.BoxGeometry(voxelSize * 0.95, voxelSize * 0.95, voxelSize * 0.95);
+                box.translate(pos.x, pos.y, pos.z);
+
+                const color = new THREE.Color(materials[matIdx].color);
+                const posAttr = box.getAttribute('position');
+                const indices = box.getIndex();
+
+                for (let i = 0; i < posAttr.count; i++) {
+                    positions.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+                    colors.push(color.r, color.g, color.b);
+                }
+            });
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+            geometry.computeVertexNormals();
+
+            const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ 
+                roughness: 0.8,
+                vertexColors: true
+            }));
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            voxelGroup.add(mesh);
+
+            return { voxelGroup, voxelMap };
+        }
+
+        const { voxelGroup, voxelMap } = generateVoxelTerrain();
+        scene.add(voxelGroup);
 
         // Lighting with shadows
-        const ambientLight = new THREE.AmbientLight(0x404060);
+        const ambientLight = new THREE.AmbientLight(0x404060, 0.8);
         scene.add(ambientLight);
         
         const mainLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
-        mainLight.position.set(5, 12, 4);
+        mainLight.position.set(50, 80, 40);
         mainLight.castShadow = true;
-        mainLight.shadow.mapSize.width = 1024;
-        mainLight.shadow.mapSize.height = 1024;
+        mainLight.shadow.mapSize.width = 2048;
+        mainLight.shadow.mapSize.height = 2048;
         mainLight.shadow.camera.near = 0.5;
-        mainLight.shadow.camera.far = 25;
-        mainLight.shadow.camera.left = -10;
-        mainLight.shadow.camera.right = 10;
-        mainLight.shadow.camera.top = 10;
-        mainLight.shadow.camera.bottom = -10;
+        mainLight.shadow.camera.far = 150;
+        mainLight.shadow.camera.left = -60;
+        mainLight.shadow.camera.right = 60;
+        mainLight.shadow.camera.top = 60;
+        mainLight.shadow.camera.bottom = -60;
         mainLight.shadow.bias = -0.0001;
         scene.add(mainLight);
         
-        const fillLight = new THREE.PointLight(0x5577aa, 0.5);
-        fillLight.position.set(-2, 3, 1);
+        const fillLight = new THREE.PointLight(0x5577aa, 0.4);
+        fillLight.position.set(-20, 30, 10);
         fillLight.castShadow = false;
         scene.add(fillLight);
         
-        const backLight = new THREE.PointLight(0xffaa66, 0.4);
-        backLight.position.set(0, 2.5, -4);
-        backLight.castShadow = false;
-        scene.add(backLight);
-        
-        const rimLight = new THREE.PointLight(0xffaa88, 0.3);
-        rimLight.position.set(3, 2, -5);
-        rimLight.castShadow = false;
-        scene.add(rimLight);
-        
         // --- FPS CONTROLS ---
         const keyState = { KeyW: false, KeyA: false, KeyS: false, KeyD: false };
-        let yaw = -Math.PI / 4;
+        let yaw = 0;
         let pitch = 0;
         let pointerLocked = false;
         let lastTime = performance.now();
-        const moveSpeed = 5.8;
+        const moveSpeed = 10;
 
         document.addEventListener('keydown', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = true; });
         document.addEventListener('keyup', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = false; });
@@ -465,23 +560,31 @@
         }
 
         function checkCollision(pos, radius = 0.45) {
-            pos.x = Math.max(-14, Math.min(14, pos.x));
-            pos.z = Math.max(-14, Math.min(14, pos.z));
-            for (let obs of obstacles) {
-                const worldPos = obs.getWorldPosition(new THREE.Vector3());
-                const halfW = obs.geometry.parameters.width / 2;
-                const halfD = obs.geometry.parameters.depth / 2;
-                const dx = pos.x - worldPos.x;
-                const dz = pos.z - worldPos.z;
-                if (Math.abs(dx) < halfW + radius && Math.abs(dz) < halfD + radius) {
-                    if (Math.abs(dx) > Math.abs(dz)) {
-                        pos.x = (dx > 0) ? worldPos.x + halfW + radius : worldPos.x - halfW - radius;
-                    } else {
-                        pos.z = (dz > 0) ? worldPos.z + halfD + radius : worldPos.z - halfD - radius;
+            pos.x = Math.max(-worldRadius * voxelSize, Math.min(worldRadius * voxelSize, pos.x));
+            pos.z = Math.max(-worldRadius * voxelSize, Math.min(worldRadius * voxelSize, pos.z));
+            
+            const voxelX = Math.round(pos.x / voxelSize);
+            const voxelY = Math.floor(pos.y / voxelSize);
+            const voxelZ = Math.round(pos.z / voxelSize);
+            
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    for (let dy = -1; dy <= 2; dy++) {
+                        const key = `${voxelX + dx},${voxelY + dy},${voxelZ + dz}`;
+                        if (voxelMap[key] !== undefined) {
+                            const voxPos = new THREE.Vector3((voxelX + dx) * voxelSize, (voxelY + dy) * voxelSize, (voxelZ + dz) * voxelSize);
+                            const halfSize = voxelSize / 2;
+                            
+                            if (Math.abs(pos.x - voxPos.x) < halfSize + radius &&
+                                Math.abs(pos.y - voxPos.y) < halfSize + radius &&
+                                Math.abs(pos.z - voxPos.z) < halfSize + radius) {
+                                return false; // collision detected
+                            }
+                        }
                     }
                 }
             }
-            return pos;
+            return true;
         }
 
         function resizeRTs(w, h) {
@@ -518,19 +621,21 @@
                 let newPos = camera.position.clone();
                 newPos.x += (move.z * forward.x + move.x * right.x) * moveSpeed * delta;
                 newPos.z += (move.z * forward.z + move.x * right.z) * moveSpeed * delta;
-                newPos = checkCollision(newPos, 0.5);
-                camera.position.x = newPos.x;
-                camera.position.z = newPos.z;
-                camera.position.y = 1.6;
+                
+                // gravity
+                newPos.y -= 9.8 * delta * 3;
+                
+                if (checkCollision(newPos, 0.5)) {
+                    camera.position.x = newPos.x;
+                    camera.position.y = newPos.y;
+                    camera.position.z = newPos.z;
+                } else {
+                    camera.position.y = Math.max(1.6, camera.position.y);
+                }
             }
 
             // Update sky shader camera position for correct gradient orientation
             updateSkyShaderCamera();
-            
-            // Animate objects
-            torus.rotation.y += 0.02;
-            torus.rotation.x = Math.sin(now * 0.002) * 0.3;
-            floatingSphere.position.y = 1.0 + Math.sin(now * 0.003) * 0.2;
 
             const w = window.innerWidth;
             const h = window.innerHeight;
