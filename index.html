@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>ASCII FPS – Procedural Voxel World | Bloom + Shadows</title>
+    <title>ASCII FPS – Procedural Voxel World</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
             font-family: 'Courier New', monospace;
+            background: #000;
         }
         #info {
             position: absolute;
@@ -20,33 +21,17 @@
             border-radius: 5px;
             pointer-events: none;
             z-index: 10;
-            font-size: 14px;
-            backdrop-filter: blur(4px);
-            border-left: 3px solid #0f0;
+            font-size: 12px;
         }
         #controls {
             position: absolute;
             bottom: 20px;
             left: 20px;
-            background: rgba(0,0,0,0.6);
-            color: #ccc;
+            background: rgba(0,0,0,0.7);
+            color: #0f0;
             padding: 8px 12px;
             border-radius: 5px;
-            font-size: 12px;
-            font-family: monospace;
-            pointer-events: none;
-            z-index: 10;
-        }
-        #status {
-            position: absolute;
-            bottom: 20px;
-            right: 20px;
-            background: rgba(0,0,0,0.6);
-            color: #ffaa00;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-family: monospace;
+            font-size: 11px;
             pointer-events: none;
             z-index: 10;
         }
@@ -55,37 +40,21 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.85);
-            color: white;
-            padding: 15px 25px;
-            border-radius: 8px;
-            text-align: center;
-            pointer-events: none;
-            z-index: 20;
-            font-family: monospace;
-            border: 1px solid #0f0;
-            transition: opacity 0.5s;
-        }
-        .instruction span {
+            background: rgba(0,0,0,0.9);
             color: #0f0;
-            font-weight: bold;
+            padding: 20px;
+            border-radius: 5px;
+            text-align: center;
+            z-index: 20;
+            font-size: 16px;
+            border: 2px solid #0f0;
         }
     </style>
 </head>
 <body>
-    <div id="info">
-        🧬 ASCII + PROCEDURAL VOXEL | WASD + MOUSE
-    </div>
-    <div id="controls">
-        🎮 WASD to move | 🖱️ Mouse to look | Click to lock cursor
-    </div>
-    <div id="status">
-        ✨ BLOOM | 🌑 SHADOWS | 🌍 GENERATED
-    </div>
-    <div class="instruction" id="clickPrompt">
-        🔥 CLICK TO START 🔥<br>
-        <span>W/A/S/D</span> to explore the procedural voxel world
-    </div>
+    <div id="info">ASCII VOXEL FPS</div>
+    <div id="controls">WASD move | Mouse look | Click to start</div>
+    <div class="instruction" id="clickPrompt">CLICK TO START</div>
 
     <script type="importmap">
         {
@@ -98,601 +67,216 @@
     <script type="module">
         import * as THREE from 'three';
 
-        // --- PERLIN NOISE IMPLEMENTATION ---
-        class PerlinNoise {
+        // Simple Perlin Noise
+        class SimplexNoise {
             constructor(seed = 0) {
                 this.p = [];
-                for (let i = 0; i < 256; i++) this.p[i] = i;
-                const rng = this.seededRandom(seed);
+                for (let i = 0; i < 256; i++) this.p[i] = Math.floor(Math.random() * 256);
+                // Shuffle
                 for (let i = 255; i > 0; i--) {
-                    const j = Math.floor(rng() * (i + 1));
+                    const j = Math.floor(Math.random() * (i + 1));
                     [this.p[i], this.p[j]] = [this.p[j], this.p[i]];
                 }
-                this.p = [...this.p, ...this.p];
-            }
-
-            seededRandom(seed) {
-                return function() {
-                    seed = (seed * 9301 + 49297) % 233280;
-                    return seed / 233280;
-                };
+                this.p = this.p.concat(this.p);
             }
 
             fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
             lerp(t, a, b) { return a + t * (b - a); }
-            grad(hash, x, y, z) {
+            grad(hash, x, y) {
                 const h = hash & 15;
-                const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+                const u = h < 8 ? x : y;
+                const v = h < 8 ? y : x;
                 return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
             }
 
-            perlin(x, y, z = 0) {
-                const xi = Math.floor(x) & 255, yi = Math.floor(y) & 255, zi = Math.floor(z) & 255;
-                const xf = x - Math.floor(x), yf = y - Math.floor(y), zf = z - Math.floor(z);
-                const u = this.fade(xf), v = this.fade(yf), w = this.fade(zf);
+            noise(x, y) {
+                const xi = Math.floor(x) & 255;
+                const yi = Math.floor(y) & 255;
+                const xf = x - Math.floor(x);
+                const yf = y - Math.floor(y);
+                const u = this.fade(xf);
+                const v = this.fade(yf);
 
-                const aa = this.p[this.p[xi] + yi], aaa = this.p[aa + zi], aab = this.p[aa + zi + 1];
-                const ba = this.p[this.p[xi + 1] + yi], baa = this.p[ba + zi], bab = this.p[ba + zi + 1];
-                const ab = this.p[this.p[xi] + yi + 1], aba = this.p[ab + zi], abb = this.p[ab + zi + 1];
-                const bb = this.p[this.p[xi + 1] + yi + 1], bba = this.p[bb + zi], bbb = this.p[bb + zi + 1];
+                const aa = this.p[this.p[xi] + yi];
+                const ba = this.p[this.p[xi + 1] + yi];
+                const ab = this.p[this.p[xi] + yi + 1];
+                const bb = this.p[this.p[xi + 1] + yi + 1];
 
-                const g1 = this.grad(this.p[aaa], xf, yf, zf);
-                const g2 = this.grad(this.p[baa], xf - 1, yf, zf);
-                const g3 = this.grad(this.p[aba], xf, yf - 1, zf);
-                const g4 = this.grad(this.p[bba], xf - 1, yf - 1, zf);
-                const g5 = this.grad(this.p[aab], xf, yf, zf - 1);
-                const g6 = this.grad(this.p[bab], xf - 1, yf, zf - 1);
-                const g7 = this.grad(this.p[abb], xf, yf - 1, zf - 1);
-                const g8 = this.grad(this.p[bbb], xf - 1, yf - 1, zf - 1);
+                const g1 = this.grad(aa, xf, yf);
+                const g2 = this.grad(ba, xf - 1, yf);
+                const g3 = this.grad(ab, xf, yf - 1);
+                const g4 = this.grad(bb, xf - 1, yf - 1);
 
-                const xy1 = this.lerp(u, g1, g2), xy2 = this.lerp(u, g3, g4), xy3 = this.lerp(u, g5, g6), xy4 = this.lerp(u, g7, g8);
-                const z1 = this.lerp(v, xy1, xy2), z2 = this.lerp(v, xy3, xy4);
-                return this.lerp(w, z1, z2);
+                const x1 = this.lerp(u, g1, g2);
+                const x2 = this.lerp(u, g3, g4);
+                return this.lerp(v, x1, x2);
             }
         }
 
-        // --- setup core three.js ---
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x050510);
-        scene.fog = new THREE.FogExp2(0x050510, 0.008);
+        scene.background = new THREE.Color(0x1a1a2e);
+        scene.fog = new THREE.Fog(0x1a1a2e, 200, 400);
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 500);
-        camera.position.set(0, 40, 0);
-        camera.rotation.order = 'YXZ';
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 35, 0);
 
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         document.body.appendChild(renderer.domElement);
 
-        // --- EVEN GRADIENT SKY ---
-        const skyVertexShader = `
-            varying vec3 vWorldPosition;
-            void main() {
-                vec4 worldPos = modelMatrix * vec4(position, 1.0);
-                vWorldPosition = worldPos.xyz;
-                gl_Position = projectionMatrix * viewMatrix * worldPos;
-            }
-        `;
-        
-        const skyFragmentShader = `
-            uniform vec3 colorTop;
-            uniform vec3 colorBottom;
-            uniform vec3 cameraPos;
-            varying vec3 vWorldPosition;
-            void main() {
-                vec3 dir = normalize(vWorldPosition - cameraPos);
-                float t = clamp(dir.y, 0.0, 1.0);
-                t = smoothstep(0.0, 0.8, t);
-                vec3 finalColor = mix(colorBottom, colorTop, t);
-                gl_FragColor = vec4(finalColor, 1.0);
-            }
-        `;
-        
-        const skyMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                colorTop: { value: new THREE.Color(0x1a4d8c) },
-                colorBottom: { value: new THREE.Color(0x7ab8e0) },
-                cameraPos: { value: new THREE.Vector3() }
-            },
-            vertexShader: skyVertexShader,
-            fragmentShader: skyFragmentShader,
-            side: THREE.BackSide,
-            depthWrite: false,
-            depthTest: true
+        // Sky
+        const skyGeo = new THREE.SphereGeometry(400, 32, 32);
+        const skyMat = new THREE.MeshBasicMaterial({ 
+            color: 0x4a90e2,
+            side: THREE.BackSide
         });
-        
-        const skySphere = new THREE.Mesh(new THREE.SphereGeometry(450, 64, 64), skyMaterial);
-        scene.add(skySphere);
-        
-        function updateSkyShaderCamera() {
-            skyMaterial.uniforms.cameraPos.value.copy(camera.position);
-        }
-        
-        // --- Render targets ---
-        let width = window.innerWidth;
-        let height = window.innerHeight;
-        
-        const mainRT = new THREE.WebGLRenderTarget(width, height, {
-            minFilter: THREE.LinearFilter,
-            magFilter: THREE.LinearFilter,
-            format: THREE.RGBAFormat,
-            type: THREE.UnsignedByteType
-        });
-        
-        const blurRT1 = new THREE.WebGLRenderTarget(width, height, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
-        const blurRT2 = new THREE.WebGLRenderTarget(width, height, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
-        const bloomRT = new THREE.WebGLRenderTarget(width, height, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat });
-        
-        // --- Helper: fullscreen quad scene ---
-        function createFullscreenScene(material) {
-            const orthoScene = new THREE.Scene();
-            const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-            orthoCamera.position.z = 1;
-            const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
-            orthoScene.add(quad);
-            return { scene: orthoScene, camera: orthoCamera };
-        }
-        
-        // --- Blur shaders ---
-        const horizontalBlurMat = new THREE.ShaderMaterial({
-            uniforms: { tDiffuse: { value: null }, texSize: { value: new THREE.Vector2(width, height) } },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `
-                uniform sampler2D tDiffuse;
-                uniform vec2 texSize;
-                varying vec2 vUv;
-                void main() {
-                    vec2 texel = vec2(1.0 / texSize.x, 0.0);
-                    vec3 col = texture2D(tDiffuse, vUv).rgb * 0.4;
-                    col += texture2D(tDiffuse, vUv + texel).rgb * 0.25;
-                    col += texture2D(tDiffuse, vUv - texel).rgb * 0.25;
-                    col += texture2D(tDiffuse, vUv + texel * 2.0).rgb * 0.05;
-                    col += texture2D(tDiffuse, vUv - texel * 2.0).rgb * 0.05;
-                    gl_FragColor = vec4(col, 1.0);
-                }
-            `
-        });
-        
-        const verticalBlurMat = new THREE.ShaderMaterial({
-            uniforms: { tDiffuse: { value: null }, texSize: { value: new THREE.Vector2(width, height) } },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `
-                uniform sampler2D tDiffuse;
-                uniform vec2 texSize;
-                varying vec2 vUv;
-                void main() {
-                    vec2 texel = vec2(0.0, 1.0 / texSize.y);
-                    vec3 col = texture2D(tDiffuse, vUv).rgb * 0.4;
-                    col += texture2D(tDiffuse, vUv + texel).rgb * 0.25;
-                    col += texture2D(tDiffuse, vUv - texel).rgb * 0.25;
-                    col += texture2D(tDiffuse, vUv + texel * 2.0).rgb * 0.05;
-                    col += texture2D(tDiffuse, vUv - texel * 2.0).rgb * 0.05;
-                    gl_FragColor = vec4(col, 1.0);
-                }
-            `
-        });
-        
-        const blendMat = new THREE.ShaderMaterial({
-            uniforms: { tOriginal: { value: null }, tBlurred: { value: null }, intensity: { value: 0.65 } },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `
-                uniform sampler2D tOriginal;
-                uniform sampler2D tBlurred;
-                uniform float intensity;
-                varying vec2 vUv;
-                void main() {
-                    vec3 original = texture2D(tOriginal, vUv).rgb;
-                    vec3 blurred = texture2D(tBlurred, vUv).rgb;
-                    gl_FragColor = vec4(original + blurred * intensity, 1.0);
-                }
-            `
-        });
-        
-        const horiScene = createFullscreenScene(horizontalBlurMat);
-        const vertScene = createFullscreenScene(verticalBlurMat);
-        const blendScene = createFullscreenScene(blendMat);
-        
-        // --- ASCII Shader ---
-        const asciiVertex = `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-        `;
-        const asciiFragment = `
-            uniform sampler2D iChannel0;
-            uniform vec2 iResolution;
-            uniform float iTime;
-            varying vec2 vUv;
-
-            #define r iResolution.xy
-            #define t iTime
-            #define zoom 1.0
-
-            #define P(id,a,b,c,d,e,f,g,h) if( id == int(pos.y) ){ int pa = a+2*(b+2*(c+2*(d+2*(e+2*(f+2*(g+2*(h))))))); cha = floor(mod(float(pa)/pow(2.,float(pos.x)-1.),2.)); }
-
-            float gray(vec3 _i) {
-                return _i.x*0.299 + _i.y*0.587 + _i.z*0.114;
-            }
-
-            void main() {
-                vec2 fragCoord = vUv * iResolution.xy;
-                vec2 uv = vec2(floor(fragCoord.x/8./zoom)*8.*zoom, floor(fragCoord.y/12./zoom)*12.*zoom)/r;
-                ivec2 pos = ivec2(mod(fragCoord.x/zoom,8.0), mod(fragCoord.y/zoom,12.0));
-                vec4 tex = texture(iChannel0, uv);
-                float cha = 0.0;
-                float g = gray(tex.xyz);
-
-                if( g < 0.125 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,0,0,0,0,0); P(9,0,0,0,0,0,0,0,0);
-                    P(8,0,0,0,0,0,0,0,0); P(7,0,0,0,0,0,0,0,0); P(6,0,0,0,0,0,0,0,0);
-                    P(5,0,0,0,0,0,0,0,0); P(4,0,0,0,0,0,0,0,0); P(3,0,0,0,0,0,0,0,0);
-                    P(2,0,0,0,0,0,0,0,0); P(1,0,0,0,0,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.25 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,0,0,0,0,0); P(9,0,0,0,0,0,0,0,0);
-                    P(8,0,0,0,0,0,0,0,0); P(7,0,0,0,0,0,0,0,0); P(6,0,0,0,0,0,0,0,0);
-                    P(5,0,0,0,0,0,0,0,0); P(4,0,0,0,1,1,0,0,0); P(3,0,0,0,1,1,0,0,0);
-                    P(2,0,0,0,0,0,0,0,0); P(1,0,0,0,0,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.375 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,0,0,0,0,0); P(9,0,0,0,0,0,0,0,0);
-                    P(8,0,0,0,0,0,0,0,0); P(7,0,0,0,0,0,0,0,0); P(6,0,0,0,0,0,0,0,0);
-                    P(5,0,0,0,0,0,0,0,0); P(4,0,0,0,1,1,0,0,0); P(3,0,0,0,1,1,0,0,0);
-                    P(2,0,0,0,0,1,0,0,0); P(1,0,0,0,1,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.5 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,0,0,0,0,0); P(9,0,0,0,0,0,0,0,0);
-                    P(8,0,0,0,0,0,0,0,0); P(7,0,0,0,0,0,0,0,0); P(6,1,1,1,1,1,1,1,0);
-                    P(5,0,0,0,0,0,0,0,0); P(4,0,0,0,0,0,0,0,0); P(3,0,0,0,0,0,0,0,0);
-                    P(2,0,0,0,0,0,0,0,0); P(1,0,0,0,0,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.625 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,0,0,0,0,0); P(9,0,0,0,1,0,0,0,0);
-                    P(8,0,0,0,1,0,0,0,0); P(7,0,0,0,1,0,0,0,0); P(6,1,1,1,1,1,1,1,0);
-                    P(5,0,0,0,1,0,0,0,0); P(4,0,0,0,1,0,0,0,0); P(3,0,0,0,1,0,0,0,0);
-                    P(2,0,0,0,0,0,0,0,0); P(1,0,0,0,0,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.75 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,0,1,0,0,0,0); P(9,1,0,0,1,0,0,1,0);
-                    P(8,0,1,0,1,0,1,0,0); P(7,0,0,1,1,1,0,0,0); P(6,0,0,0,1,0,0,0,0);
-                    P(5,0,0,1,1,1,0,0,0); P(4,0,1,0,1,0,1,0,0); P(3,1,0,0,1,0,0,1,0);
-                    P(2,0,0,0,1,0,0,0,0); P(1,0,0,0,0,0,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else if( g < 0.875 ) {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,1,0,0,1,0,0); P(9,0,0,1,0,0,1,0,0);
-                    P(8,1,1,1,1,1,1,1,0); P(7,0,0,1,0,0,1,0,0); P(6,0,0,1,0,0,1,0,0);
-                    P(5,0,1,0,0,1,0,0,0); P(4,0,1,0,0,1,0,0,0); P(3,1,1,1,1,1,1,1,0);
-                    P(2,0,1,0,0,1,0,0,0); P(1,0,1,0,0,1,0,0,0); P(0,0,0,0,0,0,0,0,0);
-                } else {
-                    P(11,0,0,0,0,0,0,0,0); P(10,0,0,1,1,1,1,0,0); P(9,0,1,0,0,0,0,1,0);
-                    P(8,1,0,0,0,1,1,1,0); P(7,1,0,0,1,0,0,1,0); P(6,1,0,0,1,0,0,1,0);
-                    P(5,1,0,0,1,0,0,1,0); P(4,1,0,0,1,0,0,1,0); P(3,1,0,0,1,1,1,1,0);
-                    P(2,0,1,0,0,0,0,0,0); P(1,0,0,1,1,1,1,1,0); P(0,0,0,0,0,0,0,0,0);
-                }
-
-                float maxC = max(tex.x, max(tex.y, tex.z));
-                vec3 col;
-                if (maxC < 0.001) col = vec3(0.2, 0.15, 0.2);
-                else col = tex.xyz / maxC;
-                
-                gl_FragColor = vec4(cha * col, 1.0);
-            }
-        `;
-        
-        const asciiMat = new THREE.ShaderMaterial({
-            uniforms: {
-                iChannel0: { value: bloomRT.texture },
-                iResolution: { value: new THREE.Vector2(width, height) },
-                iTime: { value: 0.0 }
-            },
-            vertexShader: asciiVertex,
-            fragmentShader: asciiFragment,
-            depthTest: false,
-            depthWrite: false
-        });
-        
-        const asciiScene = createFullscreenScene(asciiMat);
-        
-        // --- OPTIMIZED CHUNKED VOXEL SYSTEM ---
-        const perlin = new PerlinNoise(42);
-        const voxelSize = 1;
-        const chunkSize = 16;
-        const renderDistance = 2;
-        const worldContainer = new THREE.Group();
-        scene.add(worldContainer);
-        
-        const chunks = new Map();
-        const voxelCache = new Map();
-        const materials = [
-            new THREE.MeshStandardMaterial({ color: 0x8b6f47, roughness: 0.8 }),
-            new THREE.MeshStandardMaterial({ color: 0x704020, roughness: 0.9 }),
-            new THREE.MeshStandardMaterial({ color: 0x2d5016, roughness: 0.7 }),
-            new THREE.MeshStandardMaterial({ color: 0xa0a0a0, roughness: 0.5, metalness: 0.3 }),
-            new THREE.MeshStandardMaterial({ color: 0xcc5533, emissive: 0x331100 }),
-        ];
-
-        function getVoxel(x, y, z) {
-            const key = `${x},${y},${z}`;
-            if (voxelCache.has(key)) return voxelCache.get(key);
-
-            if (y < 0 || y > 25) return 0; // bounds
-
-            const heightNoise = perlin.perlin(x * 0.08, z * 0.08);
-            const baseHeight = Math.floor(8 + heightNoise * 6);
-
-            let voxel = 0;
-            if (y <= baseHeight) {
-                if (y === baseHeight) voxel = 2; // grass
-                else if (y > baseHeight - 3) voxel = 0; // dirt
-                else voxel = 1; // stone
-            }
-
-            voxelCache.set(key, voxel);
-            return voxel;
-        }
-
-        function generateChunk(chunkX, chunkZ) {
-            const key = `${chunkX},${chunkZ}`;
-            if (chunks.has(key)) return chunks.get(key);
-
-            const positions = [];
-            const colors = [];
-
-            for (let lx = 0; lx < chunkSize; lx++) {
-                for (let lz = 0; lz < chunkSize; lz++) {
-                    for (let y = 0; y < 20; y++) {
-                        const x = chunkX * chunkSize + lx;
-                        const z = chunkZ * chunkSize + lz;
-                        const voxel = getVoxel(x, y, z);
-
-                        if (voxel === 0) continue;
-
-                        const px = x * voxelSize;
-                        const py = y * voxelSize;
-                        const pz = z * voxelSize;
-                        const s = voxelSize * 0.5;
-
-                        // Build cube vertices
-                        const verts = [
-                            px - s, py - s, pz - s, px + s, py - s, pz - s,
-                            px + s, py + s, pz - s, px - s, py + s, pz - s,
-                            px - s, py - s, pz + s, px + s, py - s, pz + s,
-                            px + s, py + s, pz + s, px - s, py + s, pz + s,
-                        ];
-
-                        const mat = materials[voxel];
-                        for (let i = 0; i < verts.length; i += 3) {
-                            positions.push(verts[i], verts[i + 1], verts[i + 2]);
-                            colors.push(mat.color.r, mat.color.g, mat.color.b);
-                        }
-                    }
-                }
-            }
-
-            if (positions.length === 0) {
-                chunks.set(key, null);
-                return null;
-            }
-
-            const geom = new THREE.BufferGeometry();
-            geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-            geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
-            geom.computeVertexNormals();
-
-            const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ 
-                roughness: 0.8,
-                vertexColors: true,
-                castShadow: true,
-                receiveShadow: true
-            }));
-
-            chunks.set(key, mesh);
-            return mesh;
-        }
-
-        let lastChunkX = 0, lastChunkZ = 0;
-
-        function updateChunks() {
-            const chunkX = Math.floor(camera.position.x / (chunkSize * voxelSize));
-            const chunkZ = Math.floor(camera.position.z / (chunkSize * voxelSize));
-
-            if (chunkX === lastChunkX && chunkZ === lastChunkZ) return;
-
-            lastChunkX = chunkX;
-            lastChunkZ = chunkZ;
-
-            worldContainer.clear();
-
-            for (let cx = chunkX - renderDistance; cx <= chunkX + renderDistance; cx++) {
-                for (let cz = chunkZ - renderDistance; cz <= chunkZ + renderDistance; cz++) {
-                    const chunk = generateChunk(cx, cz);
-                    if (chunk) worldContainer.add(chunk);
-                }
-            }
-        }
+        const sky = new THREE.Mesh(skyGeo, skyMat);
+        scene.add(sky);
 
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0x606080, 0.7);
-        scene.add(ambientLight);
-        
-        const mainLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
-        mainLight.position.set(50, 80, 40);
-        mainLight.castShadow = true;
-        mainLight.shadow.mapSize.width = 2048;
-        mainLight.shadow.mapSize.height = 2048;
-        mainLight.shadow.camera.near = 0.5;
-        mainLight.shadow.camera.far = 150;
-        mainLight.shadow.camera.left = -60;
-        mainLight.shadow.camera.right = 60;
-        mainLight.shadow.camera.top = 60;
-        mainLight.shadow.camera.bottom = -60;
-        mainLight.shadow.bias = -0.0001;
-        scene.add(mainLight);
-        
-        // --- FPS CONTROLS ---
-        const keyState = { KeyW: false, KeyA: false, KeyS: false, KeyD: false, Space: false };
-        let yaw = 0, pitch = 0;
-        let pointerLocked = false;
-        let lastTime = performance.now();
-        const moveSpeed = 8;
-        let velocity = new THREE.Vector3();
-        const gravity = 25;
-        let isOnGround = false;
+        const light = new THREE.DirectionalLight(0xffffff, 0.8);
+        light.position.set(100, 100, 100);
+        light.castShadow = true;
+        light.shadow.mapSize.width = 2048;
+        light.shadow.mapSize.height = 2048;
+        light.shadow.camera.left = -100;
+        light.shadow.camera.right = 100;
+        light.shadow.camera.top = 100;
+        light.shadow.camera.bottom = -100;
+        scene.add(light);
 
-        document.addEventListener('keydown', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = true; });
-        document.addEventListener('keyup', (e) => { if (keyState.hasOwnProperty(e.code)) keyState[e.code] = false; });
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
-        const canvas = renderer.domElement;
-        canvas.addEventListener('click', () => canvas.requestPointerLock());
-        document.addEventListener('pointerlockchange', lockChange);
-        
-        function lockChange() {
-            if (document.pointerLockElement === canvas) {
-                pointerLocked = true;
-                document.getElementById('clickPrompt').style.opacity = '0';
-                setTimeout(() => document.getElementById('clickPrompt').style.display = 'none', 500);
-                document.addEventListener('mousemove', onMouseMove);
-            } else {
-                pointerLocked = false;
-                document.removeEventListener('mousemove', onMouseMove);
-                const prompt = document.getElementById('clickPrompt');
-                prompt.style.display = 'block';
-                prompt.style.opacity = '1';
+        // Terrain generation
+        const noise = new SimplexNoise(42);
+        const terrain = new THREE.Group();
+        scene.add(terrain);
+
+        const blockMaterial = new THREE.MeshStandardMaterial({
+            roughness: 0.8,
+            metalness: 0.1
+        });
+
+        // Generate visible terrain
+        const terrainRadius = 40;
+        const blocks = [];
+
+        for (let x = -terrainRadius; x < terrainRadius; x += 4) {
+            for (let z = -terrainRadius; z < terrainRadius; z += 4) {
+                const height = Math.floor((noise.noise(x * 0.05, z * 0.05) + 1) * 10 + 5);
+                
+                for (let y = 0; y < height; y++) {
+                    const color = y === height - 1 ? 0x2d8659 : (y > height - 3 ? 0x8b7355 : 0x654321);
+                    const geo = new THREE.BoxGeometry(4, 4, 4);
+                    const mat = new THREE.MeshStandardMaterial({ color });
+                    const block = new THREE.Mesh(geo, mat);
+                    block.position.set(x + 2, y * 4 + 2, z + 2);
+                    block.castShadow = true;
+                    block.receiveShadow = true;
+                    terrain.add(block);
+                    blocks.push({ mesh: block, x, y, z });
+                }
             }
         }
-        
+
+        // Controls
+        const keys = {};
+        document.addEventListener('keydown', e => keys[e.key] = true);
+        document.addEventListener('keyup', e => keys[e.key] = false);
+
+        let yaw = 0, pitch = 0;
+        let locked = false;
+        let startTime = Date.now();
+
         function onMouseMove(e) {
-            if (!pointerLocked) return;
-            yaw -= e.movementX * 0.002;
-            pitch -= e.movementY * 0.002;
-            pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
+            if (!locked) return;
+            yaw -= e.movementX * 0.005;
+            pitch -= e.movementY * 0.005;
+            pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+        }
+
+        renderer.domElement.addEventListener('click', () => {
+            renderer.domElement.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            locked = document.pointerLockElement === renderer.domElement;
+            if (locked) {
+                document.getElementById('clickPrompt').style.display = 'none';
+                document.addEventListener('mousemove', onMouseMove);
+            } else {
+                document.getElementById('clickPrompt').style.display = 'block';
+                document.removeEventListener('mousemove', onMouseMove);
+            }
+        });
+
+        let vel = 0;
+        const moveSpeed = 0.3;
+        const gravity = 0.01;
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update camera direction
             camera.rotation.order = 'YXZ';
             camera.rotation.y = yaw;
             camera.rotation.x = pitch;
-        }
 
-        function isVoxelSolid(x, y, z) {
-            return getVoxel(Math.floor(x), Math.floor(y), Math.floor(z)) > 0;
-        }
+            if (locked) {
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
-        function checkCollision(newPos, radius = 0.3) {
-            const checkPoints = [
-                [newPos.x - radius, newPos.y, newPos.z],
-                [newPos.x + radius, newPos.y, newPos.z],
-                [newPos.x, newPos.y, newPos.z - radius],
-                [newPos.x, newPos.y, newPos.z + radius],
-                [newPos.x - radius, newPos.y - 0.1, newPos.z - radius],
-                [newPos.x + radius, newPos.y - 0.1, newPos.z + radius],
-            ];
+                let move = new THREE.Vector3();
+                if (keys['w'] || keys['W']) move.addScaledVector(forward, moveSpeed);
+                if (keys['s'] || keys['S']) move.addScaledVector(forward, -moveSpeed);
+                if (keys['d'] || keys['D']) move.addScaledVector(right, moveSpeed);
+                if (keys['a'] || keys['A']) move.addScaledVector(right, -moveSpeed);
 
-            for (let [x, y, z] of checkPoints) {
-                if (isVoxelSolid(x, y, z)) {
-                    return false;
-                }
-            }
-            return true;
-        }
+                camera.position.add(move);
 
-        function resizeRTs(w, h) {
-            mainRT.setSize(w, h);
-            blurRT1.setSize(w, h);
-            blurRT2.setSize(w, h);
-            bloomRT.setSize(w, h);
-            horizontalBlurMat.uniforms.texSize.value.set(w, h);
-            verticalBlurMat.uniforms.texSize.value.set(w, h);
-            asciiMat.uniforms.iResolution.value.set(w, h);
-        }
-        
-        // --- MAIN RENDER LOOP ---
-        function animate() {
-            const now = performance.now();
-            let delta = Math.min(0.033, (now - lastTime) / 1000);
-            lastTime = now;
-
-            updateChunks();
-
-            if (pointerLocked) {
-                const forward = new THREE.Vector3();
-                camera.getWorldDirection(forward);
-                forward.y = 0;
-                forward.normalize();
-                const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
-
-                let moveDir = new THREE.Vector3();
-                if (keyState.KeyW) moveDir.z += 1;
-                if (keyState.KeyS) moveDir.z -= 1;
-                if (keyState.KeyD) moveDir.x += 1;
-                if (keyState.KeyA) moveDir.x -= 1;
-                if (moveDir.length() > 0) moveDir.normalize();
-                
-                let newPos = camera.position.clone();
-                newPos.x += (moveDir.z * forward.x + moveDir.x * right.x) * moveSpeed * delta;
-                newPos.z += (moveDir.z * forward.z + moveDir.x * right.z) * moveSpeed * delta;
-
-                if (checkCollision(newPos)) {
-                    camera.position.x = newPos.x;
-                    camera.position.z = newPos.z;
-                }
-                
                 // Gravity
-                velocity.y -= gravity * delta;
-                camera.position.y += velocity.y * delta;
-                
-                // Ground check
-                isOnGround = false;
-                if (camera.position.y < 1.6) {
-                    // Find ground level
-                    let groundY = 0;
-                    for (let y = Math.floor(camera.position.y); y >= 0; y--) {
-                        if (isVoxelSolid(camera.position.x, y, camera.position.z)) {
-                            groundY = y + 1;
-                            break;
-                        }
+                vel -= gravity;
+                camera.position.y += vel;
+
+                // Collision check - simple
+                let collision = false;
+                for (let block of blocks) {
+                    const bx = block.x + 2;
+                    const by = block.y * 4 + 2;
+                    const bz = block.z + 2;
+                    
+                    const dx = Math.abs(camera.position.x - bx);
+                    const dy = Math.abs(camera.position.y - by);
+                    const dz = Math.abs(camera.position.z - bz);
+
+                    if (dx < 3 && dy < 3 && dz < 3) {
+                        collision = true;
+                        break;
                     }
-                    camera.position.y = Math.max(groundY + 1.6, camera.position.y);
-                    velocity.y = 0;
-                    isOnGround = true;
+                }
+
+                // Ground collision
+                if (camera.position.y < 5) {
+                    camera.position.y = 5;
+                    vel = 0;
+                    collision = true;
+                }
+
+                // Jump
+                if ((keys[' '] || keys['w'] || keys['W']) && collision) {
+                    vel = 0.4;
                 }
             }
 
-            updateSkyShaderCamera();
-
-            const w = window.innerWidth;
-            const h = window.innerHeight;
-            if (mainRT.width !== w || mainRT.height !== h) {
-                resizeRTs(w, h);
-            }
-            
-            renderer.setRenderTarget(mainRT);
             renderer.render(scene, camera);
-            
-            horizontalBlurMat.uniforms.tDiffuse.value = mainRT.texture;
-            renderer.setRenderTarget(blurRT1);
-            renderer.render(horiScene.scene, horiScene.camera);
-            
-            verticalBlurMat.uniforms.tDiffuse.value = blurRT1.texture;
-            renderer.setRenderTarget(blurRT2);
-            renderer.render(vertScene.scene, vertScene.camera);
-            
-            blendMat.uniforms.tOriginal.value = mainRT.texture;
-            blendMat.uniforms.tBlurred.value = blurRT2.texture;
-            renderer.setRenderTarget(bloomRT);
-            renderer.render(blendScene.scene, blendScene.camera);
-            
-            renderer.setRenderTarget(null);
-            asciiMat.uniforms.iChannel0.value = bloomRT.texture;
-            asciiMat.uniforms.iTime.value = now / 1000;
-            renderer.render(asciiScene.scene, asciiScene.camera);
-            
-            requestAnimationFrame(animate);
         }
 
         window.addEventListener('resize', () => {
-            const w = window.innerWidth;
-            const h = window.innerHeight;
-            camera.aspect = w / h;
+            camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
-            renderer.setSize(w, h);
-            resizeRTs(w, h);
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
 
         animate();
