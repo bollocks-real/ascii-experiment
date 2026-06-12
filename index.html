@@ -53,7 +53,7 @@
 </head>
 <body>
     <div id="info">ASCII VOXEL FPS</div>
-    <div id="controls">WASD move | Mouse look | Click to start</div>
+    <div id="controls">WASD move | Mouse look | Space jump | Click to start</div>
     <div class="instruction" id="clickPrompt">CLICK TO START</div>
 
     <script type="importmap">
@@ -115,10 +115,10 @@
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a2e);
-        scene.fog = new THREE.Fog(0x1a1a2e, 200, 400);
+        scene.fog = new THREE.Fog(0x1a1a2e, 500, 1000);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 35, 0);
+        camera.position.set(0, 100, 0);
 
         const renderer = new THREE.WebGLRenderer({ antialias: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -127,7 +127,7 @@
         document.body.appendChild(renderer.domElement);
 
         // Sky
-        const skyGeo = new THREE.SphereGeometry(400, 32, 32);
+        const skyGeo = new THREE.SphereGeometry(1000, 32, 32);
         const skyMat = new THREE.MeshBasicMaterial({ 
             color: 0x4a90e2,
             side: THREE.BackSide
@@ -136,47 +136,57 @@
         scene.add(sky);
 
         // Lighting
-        const light = new THREE.DirectionalLight(0xffffff, 0.8);
-        light.position.set(100, 100, 100);
+        const light = new THREE.DirectionalLight(0xffffff, 0.9);
+        light.position.set(200, 300, 200);
         light.castShadow = true;
-        light.shadow.mapSize.width = 2048;
-        light.shadow.mapSize.height = 2048;
-        light.shadow.camera.left = -100;
-        light.shadow.camera.right = 100;
-        light.shadow.camera.top = 100;
-        light.shadow.camera.bottom = -100;
+        light.shadow.mapSize.width = 4096;
+        light.shadow.mapSize.height = 4096;
+        light.shadow.camera.left = -300;
+        light.shadow.camera.right = 300;
+        light.shadow.camera.top = 300;
+        light.shadow.camera.bottom = -300;
+        light.shadow.camera.far = 1000;
         scene.add(light);
 
-        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
         // Terrain generation
         const noise = new SimplexNoise(42);
         const terrain = new THREE.Group();
         scene.add(terrain);
 
-        const blockMaterial = new THREE.MeshStandardMaterial({
-            roughness: 0.8,
-            metalness: 0.1
-        });
-
-        // Generate visible terrain
-        const terrainRadius = 40;
+        // Generate visible terrain - cache blocks for collision
+        const terrainRadius = 100;
         const blocks = [];
+        const blockSize = 4;
 
-        for (let x = -terrainRadius; x < terrainRadius; x += 4) {
-            for (let z = -terrainRadius; z < terrainRadius; z += 4) {
-                const height = Math.floor((noise.noise(x * 0.05, z * 0.05) + 1) * 10 + 5);
+        // Pre-generate all terrain blocks with collision data
+        for (let x = -terrainRadius; x < terrainRadius; x += blockSize) {
+            for (let z = -terrainRadius; z < terrainRadius; z += blockSize) {
+                const height = Math.floor((noise.noise(x * 0.05, z * 0.05) + 1) * 12 + 8);
                 
                 for (let y = 0; y < height; y++) {
-                    const color = y === height - 1 ? 0x2d8659 : (y > height - 3 ? 0x8b7355 : 0x654321);
-                    const geo = new THREE.BoxGeometry(4, 4, 4);
+                    const color = y === height - 1 ? 0x2d8659 : (y > height - 4 ? 0x8b7355 : 0x654321);
+                    const geo = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
                     const mat = new THREE.MeshStandardMaterial({ color });
                     const block = new THREE.Mesh(geo, mat);
-                    block.position.set(x + 2, y * 4 + 2, z + 2);
+                    
+                    const px = x + blockSize / 2;
+                    const py = y * blockSize + blockSize / 2;
+                    const pz = z + blockSize / 2;
+                    
+                    block.position.set(px, py, pz);
                     block.castShadow = true;
                     block.receiveShadow = true;
                     terrain.add(block);
-                    blocks.push({ mesh: block, x, y, z });
+                    
+                    // Store collision data
+                    blocks.push({
+                        x: px,
+                        y: py,
+                        z: pz,
+                        size: blockSize
+                    });
                 }
             }
         }
@@ -188,7 +198,6 @@
 
         let yaw = 0, pitch = 0;
         let locked = false;
-        let startTime = Date.now();
 
         function onMouseMove(e) {
             if (!locked) return;
@@ -213,8 +222,29 @@
         });
 
         let vel = 0;
-        const moveSpeed = 0.3;
-        const gravity = 0.01;
+        const moveSpeed = 0.5;
+        const gravity = 0.015;
+        const playerRadius = 2;
+        let isOnGround = false;
+        let jumpCooldown = 0;
+
+        function checkCollision(newX, newY, newZ) {
+            for (let block of blocks) {
+                const bx = block.x;
+                const by = block.y;
+                const bz = block.z;
+                const s = block.size / 2 + playerRadius;
+
+                const dx = Math.abs(newX - bx);
+                const dy = Math.abs(newY - by);
+                const dz = Math.abs(newZ - bz);
+
+                if (dx < s && dy < s && dz < s) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         function animate() {
             requestAnimationFrame(animate);
@@ -228,45 +258,65 @@
                 const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
                 const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
-                let move = new THREE.Vector3();
-                if (keys['w'] || keys['W']) move.addScaledVector(forward, moveSpeed);
-                if (keys['s'] || keys['S']) move.addScaledVector(forward, -moveSpeed);
-                if (keys['d'] || keys['D']) move.addScaledVector(right, moveSpeed);
-                if (keys['a'] || keys['A']) move.addScaledVector(right, -moveSpeed);
-
-                camera.position.add(move);
-
-                // Gravity
-                vel -= gravity;
-                camera.position.y += vel;
-
-                // Collision check - simple
-                let collision = false;
-                for (let block of blocks) {
-                    const bx = block.x + 2;
-                    const by = block.y * 4 + 2;
-                    const bz = block.z + 2;
-                    
-                    const dx = Math.abs(camera.position.x - bx);
-                    const dy = Math.abs(camera.position.y - by);
-                    const dz = Math.abs(camera.position.z - bz);
-
-                    if (dx < 3 && dy < 3 && dz < 3) {
-                        collision = true;
-                        break;
-                    }
+                let moveX = 0, moveZ = 0;
+                if (keys['w'] || keys['W']) {
+                    moveX += forward.x;
+                    moveZ += forward.z;
+                }
+                if (keys['s'] || keys['S']) {
+                    moveX -= forward.x;
+                    moveZ -= forward.z;
+                }
+                if (keys['d'] || keys['D']) {
+                    moveX += right.x;
+                    moveZ += right.z;
+                }
+                if (keys['a'] || keys['A']) {
+                    moveX -= right.x;
+                    moveZ -= right.z;
                 }
 
-                // Ground collision
-                if (camera.position.y < 5) {
-                    camera.position.y = 5;
+                // Normalize and apply speed
+                const moveLen = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                if (moveLen > 0) {
+                    moveX = (moveX / moveLen) * moveSpeed;
+                    moveZ = (moveZ / moveLen) * moveSpeed;
+                }
+
+                // Try to move
+                let newX = camera.position.x + moveX;
+                let newZ = camera.position.z + moveZ;
+
+                if (!checkCollision(newX, camera.position.y, newZ)) {
+                    camera.position.x = newX;
+                    camera.position.z = newZ;
+                }
+
+                // Gravity and collision on Y
+                vel -= gravity;
+                let newY = camera.position.y + vel;
+
+                isOnGround = false;
+                if (checkCollision(camera.position.x, newY, camera.position.z)) {
+                    // Find ground level
+                    let groundY = camera.position.y;
+                    while (groundY > 0 && checkCollision(camera.position.x, groundY - 1, camera.position.z)) {
+                        groundY -= 1;
+                    }
+                    camera.position.y = groundY;
                     vel = 0;
-                    collision = true;
+                    isOnGround = true;
+                    jumpCooldown = 0;
+                } else {
+                    camera.position.y = newY;
                 }
 
                 // Jump
-                if ((keys[' '] || keys['w'] || keys['W']) && collision) {
-                    vel = 0.4;
+                jumpCooldown--;
+                if ((keys[' '] || keys['w'] || keys['W']) && isOnGround && jumpCooldown < 0) {
+                    vel = 0.3;
+                    isOnGround = false;
+                    jumpCooldown = 10;
                 }
             }
 
